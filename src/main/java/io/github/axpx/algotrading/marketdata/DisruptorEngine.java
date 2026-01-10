@@ -9,7 +9,11 @@ import com.lmax.disruptor.dsl.ProducerType;
 import com.lmax.disruptor.util.DaemonThreadFactory;
 import io.github.axpx.algotrading.marketdata.events.EventType;
 import io.github.axpx.algotrading.marketdata.events.MarketDataEvent;
+import io.github.axpx.algotrading.metrics.MetricsRegistry;
 import io.github.axpx.algotrading.model.Side;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,6 +29,11 @@ public class DisruptorEngine {
     private EventHandler<MarketDataEvent>[] marketDataHandlers;
     private Disruptor<MarketDataEvent> disruptor;
     private RingBuffer<MarketDataEvent> ringBuffer;
+
+
+    private final Counter quotesPublished;
+    private final Counter tradesPublished;
+    private final Timer publishLatency;
 
     @SafeVarargs
     public DisruptorEngine(
@@ -42,6 +51,12 @@ public class DisruptorEngine {
         this.waitStrategy = waitStrategy;
         this.producerType = producerType;
         this.marketDataHandlers = handlers;
+
+        MeterRegistry registry = MetricsRegistry.getRegistry();
+        this.quotesPublished = registry.counter("disruptor.events.published", "type", "quote");
+        this.tradesPublished = registry.counter("disruptor.events.published", "type", "trade");
+        this.publishLatency = registry.timer("disruptor.publish.latency");
+
     }
 
     public void start() {
@@ -84,38 +99,44 @@ public class DisruptorEngine {
     }
 
     public void publishQuote(String venue, String symbol, double bid, long bidSize, double ask, long askSize) {
-        long sequence = ringBuffer.next();
-        try {
-            MarketDataEvent event = ringBuffer.get(sequence);
-            event.clear();
-            event.setEventType(EventType.QUOTE);
-            event.setVenue(venue);
-            event.setSymbol(symbol);
-            event.setBid(bid);
-            event.setAsk(ask);
-            event.setBidSize(bidSize);
-            event.setAskSize(askSize);
-            event.setTimestamp(System.nanoTime());
-        } finally {
-            ringBuffer.publish(sequence);
+        publishLatency.record( () -> {
+            long sequence = ringBuffer.next();
+            try {
+                MarketDataEvent event = ringBuffer.get(sequence);
+                event.clear();
+                event.setEventType(EventType.QUOTE);
+                event.setVenue(venue);
+                event.setSymbol(symbol);
+                event.setBid(bid);
+                event.setAsk(ask);
+                event.setBidSize(bidSize);
+                event.setAskSize(askSize);
+                event.setTimestamp(System.nanoTime());
+            } finally {
+                ringBuffer.publish(sequence);
+            }
         }
+        );
     }
     public void publishTrade(String venue, String symbol, double price, long size, Side side, long tradeID) {
-        long sequence = ringBuffer.next();
-        try {
-            MarketDataEvent event = ringBuffer.get(sequence);
-            event.clear();
-            event.setEventType(EventType.TRADE);
-            event.setVenue(venue);
-            event.setSymbol(symbol);
-            event.setPrice(price);
-            event.setSize(size);
-            event.setSide(side);
-            event.setTradeId(tradeID);
-            event.setTimestamp(System.nanoTime());
-        } finally {
-            ringBuffer.publish(sequence);
+        publishLatency.record( () -> {
+            long sequence = ringBuffer.next();
+            try {
+                MarketDataEvent event = ringBuffer.get(sequence);
+                event.clear();
+                event.setEventType(EventType.TRADE);
+                event.setVenue(venue);
+                event.setSymbol(symbol);
+                event.setPrice(price);
+                event.setSize(size);
+                event.setSide(side);
+                event.setTradeId(tradeID);
+                event.setTimestamp(System.nanoTime());
+            } finally {
+                ringBuffer.publish(sequence);
+            }
         }
+        );
     }
 
     private boolean validateBufferSize(int bufferSize) {
