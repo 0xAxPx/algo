@@ -25,8 +25,11 @@ dependencies {
     implementation("org.slf4j:slf4j-api:2.0.9")
     implementation("ch.qos.logback:logback-classic:1.4.11")
 
-    // Metrics (optional but recommended for algo trading)
-    implementation("io.dropwizard.metrics:metrics-core:4.2.21")
+    // Micrometer core
+    implementation("io.micrometer:micrometer-core:1.16.1")
+
+    // Micrometer JVM metrics
+    implementation("io.micrometer:micrometer-registry-prometheus:1.16.1")
 
     // Testing
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.0")
@@ -46,8 +49,8 @@ tasks.test {
 
     // JVM args for low-latency testing
     jvmArgs = listOf(
-        "-XX:+UseZGC",              // ZGC for low pause times
-        "-XX:+AlwaysPreTouch",      // Touch memory upfront
+        "-XX:+UseZGC",
+        "-XX:+AlwaysPreTouch",
         "-Xms1g",
         "-Xmx2g"
     )

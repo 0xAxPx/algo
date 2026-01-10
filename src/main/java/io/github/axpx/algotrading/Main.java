@@ -4,55 +4,61 @@ import com.lmax.disruptor.YieldingWaitStrategy;
 import com.lmax.disruptor.dsl.ProducerType;
 import io.github.axpx.algotrading.marketdata.DisruptorEngine;
 import io.github.axpx.algotrading.marketdata.handlers.LoggingMarketDataHandler;
+import io.github.axpx.algotrading.metrics.MetricsServer;
 import io.github.axpx.algotrading.model.Side;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
 
 public class Main {
 
     private static final Logger logger = LoggerFactory.getLogger(Main.class);
 
-    public static void main(String[] args) throws InterruptedException {
+    public static void main(String[] args) throws Exception {
 
         logger.info("Starting Algo Trading Platform...");
+        MetricsServer.start();
 
-        // Create handler
         LoggingMarketDataHandler handler = new LoggingMarketDataHandler();
-
-        // Create DisruptorEngine with handler
         DisruptorEngine disruptorEngine = new DisruptorEngine(
                 1024,
-                new YieldingWaitStrategy(),  // Kinder to your CPU
+                new YieldingWaitStrategy(),
                 ProducerType.MULTI,
-                handler  // ← PASS THE HANDLER!
+                handler
         );
 
         disruptorEngine.start();
 
-        logger.info("Publishing test market data...");
+        // Warm-up phase
+        logger.info("Warming up JVM...");
+        for (int i = 0; i < 1000; i++) {
+            disruptorEngine.publishQuote("LMAX", "EURUSD",
+                    1.1000, 1_000_000, 1.1005, 500_000);
+        }
+        Thread.sleep(500);
 
-        // Publish some quotes
-        disruptorEngine.publishQuote("LMAX", "EURUSD", 1.1000, 1_000_000, 1.1005, 500_000);
-        disruptorEngine.publishQuote("IEX", "AAPL", 150.00, 1000, 150.05, 500);
-        disruptorEngine.publishQuote("NASDAQ", "AAPL", 150.01, 800, 150.04, 600);
+        // Actual test
+        logger.info("Starting performance test...");
+        long startTime = System.nanoTime();
 
-        // Publish some trades
-        disruptorEngine.publishTrade("LMAX", "EURUSD", 1.1005, 500_000, Side.BUY, 1001);
-        disruptorEngine.publishTrade("IEX", "AAPL", 150.05, 200, Side.BUY, 1002);
-        disruptorEngine.publishTrade("NASDAQ", "AAPL", 150.04, 300, Side.SELL, 1003);
+        for (int i = 0; i < 100_000; i++) {
+            disruptorEngine.publishQuote("LMAX", "EURUSD",
+                    1.1000 + (i * 0.0001), 1_000_000,
+                    1.1005 + (i * 0.0001), 500_000);
+        }
 
-        // More quotes
-        disruptorEngine.publishQuote("LMAX", "EURUSD", 1.1005, 900_000, 1.1010, 400_000);
-        disruptorEngine.publishQuote("IEX", "AAPL", 150.02, 900, 150.06, 450);
+        long elapsed = System.nanoTime() - startTime;
+        double throughput = 100_000.0 / (elapsed / 1_000_000_000.0);
 
-        logger.info("Finished publishing. Waiting for processing...");
+        logger.info("Published 100,000 events in {} ms", elapsed / 1_000_000);
+        logger.info("Throughput: {} events/second", throughput);
 
-        // Give handlers time to process
-        Thread.sleep(1000);
+        Thread.sleep(2000);  // Let processing complete
 
-        // Shutdown cleanly
+        logger.info("Ring buffer remaining capacity: {}",
+                disruptorEngine.getRemainingCapacity());
+
         disruptorEngine.shutdown();
-
         logger.info("Platform shutdown complete");
-    }
-}
+    }}
