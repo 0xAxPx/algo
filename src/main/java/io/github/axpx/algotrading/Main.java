@@ -6,6 +6,7 @@ import io.github.axpx.algotrading.marketdata.DisruptorEngine;
 import io.github.axpx.algotrading.marketdata.handlers.ConsolidatedQuote;
 import io.github.axpx.algotrading.marketdata.handlers.LoggingMarketDataHandler;
 import io.github.axpx.algotrading.marketdata.handlers.OrderBookHandler;
+import io.github.axpx.algotrading.marketdata.handlers.SpreadArbitrageStrategy;
 import io.github.axpx.algotrading.metrics.MetricsServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,80 +17,78 @@ public class Main {
     private static final Logger logger = LoggerFactory.getLogger(Main.class);
 
     public static void main(String[] args) throws Exception {
-
         logger.info("Starting Algo Trading Platform...");
         MetricsServer.start();
 
-        LoggingMarketDataHandler loggingMarketDataHandler = new LoggingMarketDataHandler();
+        // Handlers
+        LoggingMarketDataHandler loggingHandler = new LoggingMarketDataHandler();
         OrderBookHandler orderBookHandler = new OrderBookHandler();
+
+        // Strategy
+        SpreadArbitrageStrategy arbitrageStrategy = new SpreadArbitrageStrategy(
+                orderBookHandler,
+                "EURUSD",
+                0.00005,
+                0.0001,
+                100_000
+        );
+
+        // Create Disruptor with all handlers
         DisruptorEngine disruptorEngine = new DisruptorEngine(
                 1024,
                 new YieldingWaitStrategy(),
                 ProducerType.MULTI,
-                loggingMarketDataHandler, orderBookHandler
+                loggingHandler,
+                orderBookHandler,
+                arbitrageStrategy
         );
 
         disruptorEngine.start();
 
-        // Warm-up phase
-        logger.info("Warming up JVM...");
-        for (int i = 0; i < 1000; i++) {
-            disruptorEngine.publishQuote("LMAX", "EURUSD",
-                    1.1000, 1_000_000, 1.1005, 500_000);
-        }
-        Thread.sleep(500);
+        // Test Case 1: Create arbitrage opportunity
+        logger.info("=== TEST CASE 1: Arbitrage Opportunity ===");
 
-        // Actual test
-        logger.info("Starting performance test...");
-        long startTime = System.nanoTime();
+        disruptorEngine.publishQuote("LMAX", "EURUSD",
+                1.1000, 1_000_000,
+                1.1005, 500_000);
 
-        int events = 100_000;
+        disruptorEngine.publishQuote("IEX", "EURUSD",
+                1.1010, 800_000,
+                1.1015, 600_000);
 
-        logger.info("Starting multi-venue test...");
+        disruptorEngine.publishQuote("NASDAQ", "EURUSD",
+                1.1003, 500_000,
+                1.1008, 400_000);
 
-        String[] venues = {"LMAX", "IEX", "NASDAQ"};
-        String[] symbols = {"EURUSD", "GBPUSD", "AAPL"};
+        Thread.sleep(1000);
 
-        for (int i = 0; i < 30; i++) {
-            String venue = venues[i % venues.length];
-            String symbol = symbols[i % symbols.length];
+        // Test Case 2: No arbitrage (normal market)
+        logger.info("=== TEST CASE 2: No Arbitrage (Normal Market) ===");
 
-            double basePrice = symbol.equals("AAPL") ? 150.0 : 1.1000;
-            double venueOffset = (i % 3) * 0.0001;
+        disruptorEngine.publishQuote("LMAX", "EURUSD",
+                1.1000, 1_000_000,
+                1.1005, 500_000);
 
-            disruptorEngine.publishQuote(
-                    venue,
-                    symbol,
-                    basePrice + venueOffset,
-                    1_000_000,
-                    basePrice + venueOffset + 0.0005,
-                    500_000
-            );
-        }
+        disruptorEngine.publishQuote("IEX", "EURUSD",
+                1.1001, 800_000,
+                1.1006, 600_000);
 
-        for (String symbol : symbols) {
-            ConsolidatedQuote best = orderBookHandler.getBestQuote(symbol);
-            if (best != null) {
-                logger.info("=== {} ===", symbol);
-                logger.info("  Best Bid: {} @ {} ({})",
-                        best.bestBid(), best.bestBidVenue(), best.bestBidSize());
-                logger.info("  Best Ask: {} @ {} ({})",
-                        best.bestAsk(), best.bestAskVenue(), best.bestAskSize());
-                logger.info("  Spread: {}, Mid: {}", best.spread(), best.midPrice());
-            }
-        }
+        Thread.sleep(1000);
 
-        long elapsed = System.nanoTime() - startTime;
-        double throughput = events / (elapsed / 1_000_000_000.0);
+        // Test Case 3: Insufficient liquidity
+        logger.info("=== TEST CASE 3: Insufficient Liquidity ===");
 
-        logger.info("Published {} events in {} ms", events, elapsed / 1_000_000);
-        logger.info("Throughput: {} events/second", throughput);
+        disruptorEngine.publishQuote("LMAX", "EURUSD",
+                1.1000, 50_000,
+                1.1005, 30_000);
 
-        Thread.sleep(2000);  // Let processing complete
+        disruptorEngine.publishQuote("IEX", "EURUSD",
+                1.1010, 40_000,
+                1.1015, 20_000);
 
-        logger.info("Ring buffer remaining capacity: {}",
-                disruptorEngine.getRemainingCapacity());
+        Thread.sleep(1000);
 
         disruptorEngine.shutdown();
         logger.info("Platform shutdown complete");
-    }}
+    }
+}
